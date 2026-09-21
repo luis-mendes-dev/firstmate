@@ -214,8 +214,14 @@
 #   default-branch commit when safe: directly for a local home, or through the
 #   configured host for a remote home. Skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
-#   git worktree root distinct from both the spawning project and its repository's
-#   primary checkout, including when the spawning project is a linked worktree.
+#   git worktree root of the spawning project's own clone, distinct from both the
+#   spawning project and its repository's primary checkout, including when the
+#   spawning project is a linked worktree. A worktree of a different clone of the
+#   same repository is refused by that same test rather than launched, and the
+#   pool it would have come from cannot produce one: every treehouse get runs
+#   against this home's own pool root (bin/fm-treehouse-lib.sh), and a treehouse
+#   too old to be given one refuses the spawn instead of falling back to the
+#   repository-global default.
 #   On the backends that discover that path by reading the task pane's own cwd,
 #   the same isolation test screens every read: a pane still showing the project
 #   or the repository primary while `treehouse get` prepares the slot is waited
@@ -569,6 +575,11 @@ fi
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# Treehouse pool selection and slot ownership. Sourced beside the wake library
+# rather than from it: fm-wake-lib.sh is deliberately usable as a standalone
+# queue-and-lock primitive in minimal recovery and remote installs.
+# shellcheck source=bin/fm-treehouse-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-treehouse-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 fm_backlog_directory_present "$STATE" "state directory" || {
@@ -1145,6 +1156,7 @@ SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
 SPAWN_TREEHOUSE_PROJECT_LOCK=
 SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
+SPAWN_TREEHOUSE_POOL_ROOT=
 SPAWN_SLOT_CLAIMED=0
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
@@ -2780,6 +2792,24 @@ else
   BRIEF="$DATA/$ID/brief.md"
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+  # The pool this home may allocate from, resolved before the lock so an
+  # unusable Treehouse is reported without first serializing every other home
+  # on this project. bin/fm-treehouse-lib.sh owns why the root is per-home; the
+  # refusal is not a convenience gate but the safety property itself, because
+  # the default repository-global pool hands this home another home's worktree
+  # and the spawn then dies at workspace-trust registration instead.
+  SPAWN_TREEHOUSE_POOL_ROOT=$(fm_treehouse_home_pool_root "$FM_HOME") || {
+    echo "error: could not resolve this home's Treehouse pool root for $FM_HOME" >&2
+    exit 1
+  }
+  if ! fm_treehouse_supports_root; then
+    echo "error: the installed treehouse cannot be given an explicit pool root (needs >=$FM_TREEHOUSE_MIN_ROOT_VERSION); refusing to allocate from the repository-global pool, which can hand this home a worktree belonging to another firstmate home. Upgrade treehouse, then respawn" >&2
+    exit 1
+  fi
+  mkdir -p "$SPAWN_TREEHOUSE_POOL_ROOT" || {
+    echo "error: could not create this home's Treehouse pool root $SPAWN_TREEHOUSE_POOL_ROOT" >&2
+    exit 1
+  }
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
     echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
     exit 1
@@ -2962,7 +2992,7 @@ real_path_or_raw() { # <path>
 SPAWN_WT_TOP=
 SPAWN_WT_REASON=
 spawn_worktree_isolated() { # <path>
-  local path=$1 wt_real wt_top_real wt_git_dir proj_common
+  local path=$1 wt_real wt_top_real wt_git_dir wt_common proj_common
   SPAWN_WT_TOP=
   SPAWN_WT_REASON=
   wt_real=
@@ -3009,13 +3039,32 @@ spawn_worktree_isolated() { # <path>
     SPAWN_WT_REASON="it is the repository's primary checkout (its git dir is the spawning project's common git dir)"
     return 1
   fi
+  # An isolated worktree of ANOTHER clone is not isolation, it is someone else's
+  # copy. A worktree of the spawning project shares that project's common git
+  # dir by construction, so requiring the match is what tells this project's own
+  # pool slot apart from a slot a different firstmate home created in a shared
+  # repository-global pool (bin/fm-treehouse-lib.sh). Without it the foreign
+  # copy passes every check above - it is a real worktree root, it is not this
+  # project, and its git dir is not this project's common dir - and the spawn
+  # only dies later, at workspace-trust registration, having already recorded a
+  # worktree= line pointing into another home's work.
+  wt_common=$(git -C "$path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+    wt_common=$(cd "$wt_common" 2>/dev/null && pwd -P) || wt_common=
+  if [ -z "$wt_common" ]; then
+    SPAWN_WT_REASON="its common git directory could not be resolved"
+    return 1
+  fi
+  if [ "$wt_common" != "$proj_common" ]; then
+    SPAWN_WT_REASON="it belongs to a different clone (its common git dir is '$wt_common', not the spawning project's '$proj_common')"
+    return 1
+  fi
   return 0
 }
 
 validate_spawn_worktree() { # <source> <inspect-target>
   local source=$1 inspect_target=$2
   if ! spawn_worktree_isolated "$WT"; then
-    echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${SPAWN_WT_TOP:-none}'; spawning project '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
+    echo "error: $source did not yield an isolated worktree of this project: $SPAWN_WT_REASON (resolved '$WT'; worktree root '${SPAWN_WT_TOP:-none}'; spawning project '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout or another clone's copy. Inspect target $inspect_target" >&2
     exit 1
   fi
 }
@@ -3949,7 +3998,13 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  # --root keeps the allocation inside this home's own pool. Passed on the
+  # command line rather than through the pane's environment because the pane's
+  # shell is the operator's own login shell with the operator's own profile: an
+  # exported TREEHOUSE_ROOT could be overridden there, and would leak into every
+  # later treehouse call the worker makes by hand.
+  spawn_send_text_line "$WT_TARGET" \
+    "treehouse get --root '${SPAWN_TREEHOUSE_POOL_ROOT//\'/\'\\\'\'}'"
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an

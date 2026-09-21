@@ -352,12 +352,39 @@ fm_fake_exit0() {
   local fakebin=$1 tool
   shift
   for tool in "$@"; do
+    # treehouse is the one exception to "exit 0 is enough". Production probes it
+    # for --lease and --root before it will seed a home or allocate a task
+    # worktree (bin/fm-treehouse-lib.sh), and refuses a build carrying neither,
+    # so a silent stub is not a stand-in for the tool firstmate requires - it is
+    # a stand-in for one firstmate rejects. Answering the probe here keeps every
+    # suite that only needs treehouse PRESENT from having to know that, while a
+    # suite pinning the refusal installs its own stub over this one.
+    if [ "$tool" = treehouse ]; then
+      fm_fake_treehouse "$fakebin"
+      continue
+    fi
     cat > "$fakebin/$tool" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
     chmod +x "$fakebin/$tool"
   done
+}
+
+# fm_fake_treehouse <fakebin>
+# A no-op treehouse that answers the capability probe above.
+fm_fake_treehouse() {
+  local fakebin=$1
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
+  printf 'Flags:\n      --lease   Durably lease a worktree\n'
+  printf 'Global Flags:\n      --root string   Worktree root directory\n'
+fi
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
 }
 
 # fm_fake_crash_injector <fakebin>

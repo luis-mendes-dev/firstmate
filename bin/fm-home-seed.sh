@@ -7,7 +7,9 @@
 #       a fresh firstmate worktree via "treehouse get --lease", which durably
 #       leases the worktree under the secondmate <id> so the home survives with
 #       no live process and is never recycled until the lease is released with
-#       "treehouse return". Projects are cloned
+#       "treehouse return". That lease comes from this home's own pool root
+#       (bin/fm-treehouse-lib.sh), so it can never be a worktree of another
+#       Firstmate code root's clone. Projects are cloned
 #       from the active home into the secondmate home's projects/ directory.
 #       That project list is non-exclusive provisioning data. Pass --no-projects
 #       instead of a project list to seed a project-less home for a domain whose
@@ -49,6 +51,11 @@ SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 . "$SCRIPT_DIR/fm-secondmate-charter-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# Treehouse pool selection and slot ownership. Sourced beside the wake library
+# rather than from it: fm-wake-lib.sh is deliberately usable as a standalone
+# queue-and-lock primitive in minimal recovery and remote installs.
+# shellcheck source=bin/fm-treehouse-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-treehouse-lib.sh"
 
 usage() {
   echo "usage: fm-home-seed.sh <id> <home|-> {<project>...|--no-projects}" >&2
@@ -388,12 +395,31 @@ seeded_origin_url() {
 }
 
 acquire_treehouse_home() {
-  local id=$1 home
+  local id=$1 home root
   # Durably lease a firstmate worktree from the pool. The lease persists with no
   # live process and is skipped by later get/prune, so the home survives restarts
   # until teardown or rollback returns it. treehouse prints only the worktree path
   # to stdout (banners go to stderr), so command substitution captures the path.
-  home=$(cd "$FM_ROOT" && treehouse get --lease --lease-holder "$id") || {
+  #
+  # The pool is this home's own, for the same reason a task worktree's is: a
+  # machine carrying two Firstmate code roots resolves both to one
+  # repository-global pool, and a released lease there can be handed back as a
+  # worktree of the OTHER code root's clone (bin/fm-treehouse-lib.sh). A
+  # treehouse that cannot be given a root refuses rather than seeding a home into
+  # that pool; returning an already-leased home keeps working by path either way.
+  root=$(fm_treehouse_home_pool_root "$FM_HOME") || {
+    echo "error: could not resolve this home's Treehouse pool root for $FM_HOME" >&2
+    return 1
+  }
+  if ! fm_treehouse_supports_root; then
+    echo "error: the installed treehouse cannot be given an explicit pool root (needs >=$FM_TREEHOUSE_MIN_ROOT_VERSION); refusing to lease a home from the repository-global pool, which can hand back a worktree belonging to another firstmate code root. Upgrade treehouse, then re-seed" >&2
+    return 1
+  fi
+  mkdir -p "$root" || {
+    echo "error: could not create this home's Treehouse pool root $root" >&2
+    return 1
+  }
+  home=$(cd "$FM_ROOT" && treehouse get --root "$root" --lease --lease-holder "$id") || {
     echo "error: treehouse get --lease failed to lease a firstmate home" >&2
     return 1
   }

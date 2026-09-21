@@ -2287,3 +2287,58 @@ A throwaway scout was spawned through `bin/fm-spawn.sh --scout --harness omp --m
 6. `bin/fm-control.sh <id> exit` stopped the agent and `bin/fm-teardown.sh` returned the worktree and closed the item.
 
 `FM_OMP_LIVE_E2E=1 tests/fm-omp-primary-live-e2e.test.sh` refreshes the primary evidence; the worker path above is refreshed by repeating the scout dispatch after any omp upgrade.
+
+## Treehouse worktree pool
+
+Verified 2026-09-21 on Treehouse v2.3.0, the version `bin/fm-install-treehouse.sh` pins for CI.
+Treehouse names a pool `<root>/.treehouse/<clone-basename>-<repository-hash>`, so the acquiring clone's PATH is not part of the key.
+Two firstmate homes that each cloned one origin to `$FM_HOME/projects/<name>` therefore resolve to the same pool and are handed each other's worktrees.
+
+Two homes were built over one bare origin, each with its clone at `<home>/projects/proj`, and the default shared root was used.
+Home B leased a worktree and returned it; home A then leased from the same pool.
+
+```sh
+export TREEHOUSE_ROOT=/tmp/thv/shared
+B=$(cd homeB/projects/proj && treehouse get --no-fetch --lease --lease-holder b)
+(cd homeB/projects/proj && treehouse return --force "$B")
+A=$(cd homeA/projects/proj && treehouse get --no-fetch --lease --lease-holder a)
+printf '%s\n%s\n' "$A" "$(git -C "$A" rev-parse --path-format=absolute --git-common-dir)"
+```
+
+```
+/tmp/thv/shared/.treehouse/proj-2732a6/1/proj
+/private/tmp/thv/homeB/projects/proj/.git
+```
+
+Home A received a worktree of home B's clone.
+That copy is a valid isolated worktree, so only its common git dir distinguishes it, and `bin/fm-claude-trust.sh`'s structural scope test refuses to register workspace trust for it - the worker then wedges on a dialog firstmate cannot answer.
+
+The same two homes, each given its own root, keep their allocations in their own clones.
+The pool directory name is identical under both roots, which is the direct evidence that the root is the only discriminator Treehouse offers here.
+
+```sh
+A=$(cd homeA/projects/proj && treehouse get --root /tmp/thv/rootA --no-fetch --lease --lease-holder a)
+B=$(cd homeB/projects/proj && treehouse get --root /tmp/thv/rootB --no-fetch --lease --lease-holder b)
+```
+
+```
+/tmp/thv/rootA/.treehouse/proj-2732a6/1/proj
+       /private/tmp/thv/homeA/projects/proj/.git
+/tmp/thv/rootB/.treehouse/proj-2732a6/1/proj
+       /private/tmp/thv/homeB/projects/proj/.git
+```
+
+`--root` and `TREEHOUSE_ROOT` were added in Treehouse 2.2.0, which is the floor `bin/fm-treehouse-lib.sh` probes for and every spawn and home seed refuses below.
+
+```sh
+treehouse --version
+treehouse get --help | grep -- --root
+```
+
+```
+v2.3.0
+      --root string   Worktree root directory, overriding TREEHOUSE_ROOT and config; relative paths (e.g. "." for an in-project pool) resolve from the repo root
+```
+
+`tests/fm-treehouse-home-pool-live-e2e.test.sh` refreshes this evidence against the installed binary and prints the version it checked; it runs by default wherever treehouse is installed.
+`tests/fm-treehouse-home-pool.test.sh` pins the portable half - per-home root derivation, the spawn's foreign-clone and missing-capability refusals, and legacy-pool reporting - with no treehouse present.

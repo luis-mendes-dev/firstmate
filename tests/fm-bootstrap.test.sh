@@ -8,7 +8,7 @@
 # 'MISSING: gh-axi (install: ...)', 'PRESENTATION_UNAVAILABLE: lavish-axi ...', and
 # 'BOOTSTRAP_INFO: ...' lines, so those contracts are pinned verbatim. The cases
 # are table-driven over the inputs that vary: whether `treehouse get --help`
-# advertises --lease, which (if any) tasks-axi version is on PATH, whether
+# advertises --lease and --root, which (if any) tasks-axi version is on PATH, whether
 # tasks-axi update advertises --archive-body, whether its mv help advertises
 # multi-ID moves, whether quota-axi is on PATH,
 # whether the local backend config opts out of tasks-axi backlog mutations,
@@ -40,7 +40,9 @@ unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
   CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_SOCKET_PATH CMUX_TAB_ID CMUX_PANEL_ID 2>/dev/null || true
 
 # A fake toolchain where every required tool is present and gh is authenticated.
-# treehouse's `get --help` advertises --lease only when FM_FAKE_TREEHOUSE_LEASE_HELP=1.
+# treehouse's `get --help` advertises --lease only when FM_FAKE_TREEHOUSE_LEASE_HELP=1,
+# and --root unless FM_FAKE_TREEHOUSE_ROOT_HELP=0. Both are probed capabilities, so a
+# build missing either is reported as a treehouse upgrade.
 make_fake_toolchain() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
@@ -70,6 +72,9 @@ if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
     printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'
   else
     printf '%s\n' 'Usage: treehouse get'
+  fi
+  if [ "${FM_FAKE_TREEHOUSE_ROOT_HELP:-1}" = 1 ]; then
+    printf '%s\n' '      --root string   Worktree root directory'
   fi
   exit 0
 fi
@@ -725,6 +730,87 @@ test_treehouse_lease_check_follows_resolved_backend() {
   pass "bootstrap: the treehouse lease check follows the resolved backend's worktree provider"
 }
 
+# The same gate covers --root. A treehouse that carries --lease but cannot be
+# given a pool root can only allocate from the repository-global pool that hands
+# one home another home's worktree, and every spawn refuses below that floor
+# (bin/fm-treehouse-lib.sh), so bootstrap has to say so at session start rather
+# than letting the first dispatch discover it.
+test_treehouse_root_capability_is_part_of_the_same_gate() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/rootless-treehouse"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_TREEHOUSE_ROOT_HELP=0 "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" "MISSING: treehouse" \
+    "a treehouse with --lease but no --root must still report an upgrade"
+
+  # Orca owns its own worktrees, so the same build stays silent there.
+  case_dir="$TMP_ROOT/rootless-treehouse-orca"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf '%s\n' orca > "$case_dir/home/config/backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  rm -f "$fakebin/tmux"
+  fm_fake_exit0 "$fakebin" orca
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_TREEHOUSE_ROOT_HELP=0 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "backend=orca must not require a root-capable treehouse, got: $out"
+  pass "bootstrap: the treehouse --root capability shares the lease gate and its backend scope"
+}
+
+# Worktrees a home still holds in the pool every home used to share are reported
+# so the fleet can see it is not yet actually isolated, and only ever this home's
+# own: another home's parked work is not this home's to report or return.
+test_legacy_treehouse_pool_slots_are_reported_for_this_home_only() {
+  local case_dir home other fakebin pool out own_root
+  case_dir="$TMP_ROOT/legacy-pool"
+  home="$case_dir/home"
+  other="$case_dir/other-home"
+  pool="$case_dir/shared-pool"
+  mkdir -p "$home/config" "$home/projects" "$other/projects" "$pool"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  fm_git_identity
+  fm_git_init_commit "$case_dir/seed"
+  git clone --quiet "$case_dir/seed" "$home/projects/proj"
+  git clone --quiet "$case_dir/seed" "$other/projects/proj"
+  printf '{"worktrees":[]}\n' > "$pool/treehouse-state.json"
+  git -C "$home/projects/proj" worktree add --quiet --detach "$pool/1/proj" HEAD
+  git -C "$other/projects/proj" worktree add --quiet --detach "$pool/2/proj" HEAD
+  printf 'task=held-task\nhome=%s\n' "$home" > "$pool/1/.fm-slot-owner"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    TREEHOUSE_ROOT="$case_dir/pools" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" "TREEHOUSE_POOL: proj holds 1 worktree(s) in a legacy repository-global pool (claimed by: held-task)" \
+    "bootstrap must report this home's legacy pool slot and its recorded claim"
+  assert_not_contains "$out" "$pool/2/proj" \
+    "bootstrap must not report another home's legacy pool slot"
+
+  # A home whose only pooled worktree already sits in its own root says nothing.
+  case_dir="$TMP_ROOT/own-pool"
+  home="$case_dir/home"
+  mkdir -p "$home/config" "$home/projects" "$case_dir/pools"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  fm_git_init_commit "$case_dir/seed"
+  git clone --quiet "$case_dir/seed" "$home/projects/proj"
+  own_root=$(TREEHOUSE_ROOT="$case_dir/pools" \
+    bash -c '. "$1/bin/fm-treehouse-lib.sh"; fm_treehouse_home_pool_root "$2"' _ "$ROOT" "$home")
+  mkdir -p "$own_root/.treehouse/proj-test"
+  printf '{"worktrees":[]}\n' > "$own_root/.treehouse/proj-test/treehouse-state.json"
+  git -C "$home/projects/proj" worktree add --quiet --detach \
+    "$own_root/.treehouse/proj-test/1/proj" HEAD
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    TREEHOUSE_ROOT="$case_dir/pools" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$out" "TREEHOUSE_POOL:" \
+    "a slot inside this home's own pool root must not be reported as legacy"
+  pass "bootstrap: legacy repository-global pool slots are reported for this home only"
+}
+
 test_fleet_sync_timeout_scales_with_origin_backed_project_count() {
   local case_dir home fakebin fake_root out
   case_dir="$TMP_ROOT/fleet-timeout-scaled"
@@ -1252,6 +1338,8 @@ test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux
 test_treehouse_lease_check_follows_resolved_backend
+test_treehouse_root_capability_is_part_of_the_same_gate
+test_legacy_treehouse_pool_slots_are_reported_for_this_home_only
 test_fleet_sync_timeout_scales_with_origin_backed_project_count
 test_fleet_sync_timeout_floor_preserves_small_fleets
 test_fleet_sync_timeout_explicit_override_wins

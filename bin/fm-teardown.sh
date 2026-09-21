@@ -338,6 +338,11 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 }
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# Treehouse pool selection and slot ownership. Sourced beside the wake library
+# rather than from it: fm-wake-lib.sh is deliberately usable as a standalone
+# queue-and-lock primitive in minimal recovery and remote installs.
+# shellcheck source=bin/fm-treehouse-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-treehouse-lib.sh"
 # Supervision lease guard: post-landing cleanup is overlap territory between
 # the two Pi supervision actors; refuse while the OTHER actor holds this
 # task's live lease (contract: bin/fm-lease-lib.sh; no-op in homes without

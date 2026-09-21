@@ -11,6 +11,8 @@
 #                 "BACKEND_INVALID: <name> (known: <names>)",
 #                 "STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
+#                 "TREEHOUSE_POOL: <project> holds <n> worktree(s) in a legacy
+#                 repository-global pool (claimed by: <task-ids|unclaimed>); ...",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "HOME_SUMMARY: <ledger never published|not republished since
 #                 <stamp>>; <n> failed attempt(s) ... last: <recorded failure>",
@@ -195,6 +197,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# Safe in the read-only detect phase: this one has no source-time side effects,
+# unlike fm-wake-lib.sh, which the mutating sweeps below load for themselves.
+# shellcheck source=bin/fm-treehouse-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-treehouse-lib.sh"
 # fm-timing-lib.sh is inert unless FM_TIMING_LOG names a file, which only the
 # deferred network stage sets, so an ordinary bootstrap run records nothing.
 # shellcheck source=bin/fm-timing-lib.sh disable=SC1091
@@ -1469,11 +1475,15 @@ detect_local_tools() {
   for t in $COMMON_TOOLS; do
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
-  # The treehouse lease-support upgrade check is only relevant when the resolved
+  # The treehouse capability upgrade check is only relevant when the resolved
   # backend actually requires treehouse (every backend except orca, which owns its
   # own worktrees); an orca home must not be told to upgrade a provider it never uses.
+  # Both probed capabilities are load-bearing: --lease holds a secondmate home
+  # across restarts, and --root is what keeps this home's pool out of the
+  # repository-global one every spawn now refuses (bin/fm-treehouse-lib.sh).
   if fm_backend_list_contains "$TOOLS" treehouse \
-    && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
+    && command -v treehouse >/dev/null 2>&1 \
+    && { ! treehouse_supports_lease || ! fm_treehouse_supports_root; }; then
     echo "MISSING: treehouse (install: $(install_cmd treehouse))"
   fi
   if command -v no-mistakes >/dev/null 2>&1 && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
@@ -1595,6 +1605,28 @@ detect_home_summary_publication() {
   fi
 }
 
+# Pooled worktrees this home's clones still hold in a legacy repository-global
+# pool, from before pool selection was scoped to the owning home. They are not
+# broken - a task running in one keeps working, and teardown returns it by path -
+# but they are the copies another home can be handed, so the fleet is only
+# actually isolated once they are gone. Detect-only, and deliberately says
+# nothing about slots this home does not own: another home's parked work is not
+# this home's to report or to return.
+detect_legacy_treehouse_pools() {
+  local project slots count claims
+  command -v treehouse >/dev/null 2>&1 || return 0
+  fm_backend_list_contains "$TOOLS" treehouse || return 0
+  [ -d "$PROJECTS" ] || return 0
+  for project in "$PROJECTS"/*; do
+    [ -d "$project/.git" ] || [ -f "$project/.git" ] || continue
+    slots=$(fm_treehouse_legacy_pool_slots "$project" "$FM_HOME" 2>/dev/null) || continue
+    [ -n "$slots" ] || continue
+    count=$(printf '%s\n' "$slots" | wc -l | tr -d ' ')
+    claims=$(printf '%s\n' "$slots" | cut -f2 | paste -sd, - | tr -d ' ')
+    echo "TREEHOUSE_POOL: $(basename "$project") holds $count worktree(s) in a legacy repository-global pool (claimed by: $claims); new work already takes this home's own pool, and these stay usable until returned"
+  done
+}
+
 # The order below is the order the diagnostics have always printed in, so a
 # `skip` run is the same output with the network lines removed rather than a
 # reshuffle. `gh auth status` sits between the two local blocks because that is
@@ -1615,6 +1647,7 @@ if network_phase; then
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
+local_phase && detect_legacy_treehouse_pools
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # secondmate_sync consumes SECONDMATE_RESPAWNED_IDS from the liveness sweep, so

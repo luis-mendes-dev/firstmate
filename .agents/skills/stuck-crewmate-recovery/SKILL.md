@@ -35,8 +35,15 @@ Read the targeted current state with `bin/fm-crew-state.sh <id>` before deciding
 A no-mistakes run matched to the crew's branch and current code remains authoritative when the endpoint is dead: handle a terminal or parked run through the normal lifecycle, and keep supervising an active run instead of creating a duplicate worker.
 
 When no authoritative run accounts for the task, inspect only its recorded backend and worktree inventory.
-Use `treehouse status` for treehouse-backed tmux, herdr, zellij, or cmux tasks, and use the recorded `orca_worktree_id=` and `terminal=` for Orca tasks.
-Do not sweep another home's endpoints or infer ownership from a matching window label.
+The task's recorded `worktree=` is the authority for treehouse-backed tmux, herdr, zellij, or cmux tasks, and the recorded `orca_worktree_id=` and `terminal=` for Orca tasks.
+When a pool listing genuinely adds something, pass this home's own pool root to `treehouse status --root`:
+
+```sh
+treehouse status --root "$(bash -c '. bin/fm-treehouse-lib.sh; fm_treehouse_home_pool_root')"
+```
+
+A bare `treehouse status` reads the default repository-global pool, which is as likely to be another home's inventory as this home's, so never read it as this task's.
+Do not sweep another home's endpoints or pools, and never infer ownership from a matching window label.
 
 Before relaunch, prove that no live agent still owns the recorded task and that the existing worktree remains available.
 Preserve its uncommitted changes and commits, keep the same task identity, and resume or relaunch the recorded harness in that existing worktree with the same brief plus a concise progress note.
