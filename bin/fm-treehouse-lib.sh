@@ -103,9 +103,8 @@ fm_treehouse_legacy_pool_slots() {  # <project> [home]
     case "$line" in worktree\ *) worktree=${line#worktree } ;; *) continue ;; esac
     worktree=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || continue
     case "$worktree" in "$prefix"*) continue ;; esac
-    # Only a managed pool slot, never a hand-made worktree: the fixed
-    # <pool>/<slot>/<repo> layout with the pool's own state file above it.
-    [ -f "$(dirname "$(dirname "$worktree")")/treehouse-state.json" ] || continue
+    # Only a managed pool slot, never a hand-made worktree of the same clone.
+    fm_treehouse_pool_slot "$project" "$worktree" || continue
     claim=unclaimed
     fm_treehouse_slot_owner_state "$worktree" ''
     [ -z "$FM_TREEHOUSE_SLOT_OWNER_ID" ] || claim=$FM_TREEHOUSE_SLOT_OWNER_ID
