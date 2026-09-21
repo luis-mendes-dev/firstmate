@@ -6,8 +6,11 @@
 # directory.
 #
 # Deliberately free of source-time side effects (no state directory, no config
-# read), because bin/fm-bootstrap.sh sources it from its read-only detect phase
-# as well as through bin/fm-wake-lib.sh, which every spawn and teardown loads.
+# read), because bin/fm-bootstrap.sh sources it from its read-only detect phase.
+# Its consumers - bin/fm-spawn.sh, bin/fm-teardown.sh, bin/fm-home-seed.sh - each
+# source it beside fm-wake-lib.sh rather than through it, so that library stays
+# usable on its own as the queue-and-lock primitive minimal recovery fixtures and
+# remote installs carry.
 #
 # WHY A HOME-SCOPED ROOT EXISTS. Treehouse keys a pool by the acquiring
 # checkout's DIRECTORY BASENAME plus a hash of the repository identity -
