@@ -336,7 +336,8 @@ fm_live_gate() {
 #
 # fm_fakebin <dir> creates <dir>/fakebin and echoes it; prepend it to PATH to
 # shadow real tools with stubs. fm_fake_exit0 drops trivial exit-0 stubs for the
-# named tools into a fakebin dir. fm_fake_crash_injector drops the shim a fake
+# named tools into a fakebin dir, with one exception it documents at its own
+# `treehouse` branch. fm_fake_crash_injector drops the shim a fake
 # uses to crash the process under test deterministically. fm_fake_version_tool
 # drops a stub for a tool whose installed version bootstrap gates, so a fixture
 # cannot be reported as an unparseable build simply for answering `--version`
