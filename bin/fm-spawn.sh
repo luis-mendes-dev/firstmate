@@ -265,6 +265,16 @@
 #   prevents equal task ids in different Firstmate homes from sharing a file.
 #   Spawn refuses an unsafe pre-existing task temp root or launch namespace, and
 #   task teardown removes only the current home's launch namespace.
+# Pane toolchain PATH:
+#   The pane shell a backend daemon starts need not run the operator's login
+#   files, so a mise-managed toolchain can be missing from it even when it is
+#   installed. Every launch therefore appends the mise Node install's bin
+#   directory to the pane PATH before the launch command, so the agent, its
+#   startup hooks, and later pane commands resolve gh-axi and
+#   chrome-devtools-axi. mise's data root comes from MISE_DATA_DIR or
+#   XDG_DATA_HOME, the version from mise itself, and an unprovable answer
+#   leaves PATH unchanged. Appended rather than prepended, so an existing pane
+#   PATH keeps its own precedence.
 # Launch environment (config/launch-env-allowlist):
 #   Absent means unchanged ambient inheritance. A present readable regular file
 #   opts every launch (ship, scout, secondmate, raw command, and relaunch) into
@@ -4847,10 +4857,45 @@ spawn_record_traceparent() {
   return "$status"
 }
 
+# spawn_mise_node_bin: the mise-managed Node install's bin directory, or nothing.
+#
+# The pane shell a backend daemon starts need not run the operator's login
+# files, so a mise-managed toolchain can be absent from the pane PATH even
+# though it is installed: gh-axi and chrome-devtools-axi live in that bin
+# directory, and Claude's own startup hooks run them. mise's data root is
+# discovered from its documented environment rather than a hard-coded path, and
+# the version is resolved by asking mise itself instead of reimplementing its
+# alias resolution. The mise binary that root's own shims are symlinks to is
+# tried before PATH: it belongs to the root being asked about, and it still
+# resolves under the reduced PATH this exists for. Anything unproven - no mise,
+# no answer, a relative answer, or a directory that is not there - prints
+# nothing and leaves PATH untouched.
+spawn_mise_node_bin() {
+  local data mise dir
+  data=${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}
+  mise=$(readlink "$data/shims/node" 2>/dev/null || true)
+  [ -n "$mise" ] && [ -x "$mise" ] || mise=$(command -v mise 2>/dev/null || true)
+  [ -n "$mise" ] && [ -x "$mise" ] || return 0
+  # Pin the root back onto the query so the answer describes the root that
+  # supplied the binary rather than whatever mise would default to.
+  dir=$(MISE_DATA_DIR="$data" "$mise" where node 2>/dev/null) || return 0
+  case "$dir" in /*) ;; *) return 0 ;; esac
+  [ -d "$dir/bin" ] || return 0
+  printf '%s' "$dir/bin"
+}
+
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
 spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+# Append the mise Node toolchain to the pane PATH through that same pre-launch
+# site, so the agent, its startup hooks, and later pane commands all resolve
+# gh-axi and chrome-devtools-axi. Appended, never prepended: whatever the pane
+# already resolves keeps winning, and a pane that lost the directory gains it.
+SPAWN_MISE_NODE_BIN=$(spawn_mise_node_bin)
+if [ -n "$SPAWN_MISE_NODE_BIN" ]; then
+  spawn_send_text_line "$T" "export PATH=\$PATH:$(shell_quote "$SPAWN_MISE_NODE_BIN")"
+fi
 # Export the compact-adviser kill switch into the pane shell through the same
 # pre-launch channel, so later commands in that shell inherit it too. The launch
 # command independently establishes the value for the agent process itself.
