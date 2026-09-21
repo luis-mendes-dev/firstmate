@@ -39,6 +39,7 @@ SH
 #!/usr/bin/env bash
 if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
   printf '%s\n' 'Usage: treehouse get [--lease]'
+  printf '%s\n' '      --root string   Worktree root directory'
 fi
 SH
   cat > "$fakebin/no-mistakes" <<'SH'

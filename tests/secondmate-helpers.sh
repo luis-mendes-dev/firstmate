@@ -91,6 +91,13 @@ set -u
 printf 'treehouse %s\n' "$*" >> "${FM_FAKE_TMUX_LOG:-/dev/null}"
 case "${1:-}" in
   get)
+    # Answer the capability probe production runs before it will lease anything:
+    # --lease and --root (bin/fm-treehouse-lib.sh).
+    if [ "${2:-}" = --help ]; then
+      printf 'Flags:\n      --lease   Durably lease a worktree\n'
+      printf 'Global Flags:\n      --root string   Worktree root directory\n'
+      exit 0
+    fi
     # Durable lease: print only the worktree path to stdout (banners to stderr),
     # and record the lease holder so tests can assert it is set and later cleared.
     shift
@@ -100,6 +107,8 @@ case "${1:-}" in
         --lease) ;;
         --lease-holder) shift; holder=${1:-} ;;
         --lease-holder=*) holder=${1#--lease-holder=} ;;
+        --root) shift ;;
+        --root=*) ;;
       esac
       shift
     done

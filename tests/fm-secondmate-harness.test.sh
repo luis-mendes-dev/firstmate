@@ -680,7 +680,10 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" pi
+  # treehouse: a ship or scout spawn probes it for --root before allocating a
+  # worktree (bin/fm-treehouse-lib.sh), and BASE_PATH deliberately omits the
+  # developer's, so the shared capability-answering fake stands in for it.
+  fm_fake_exit0 "$fakebin" pi treehouse
   # BASE_PATH deliberately omits the developer's node, which the trust
   # registration below needs, so link the real one in rather than presenting a
   # node-less spawn host no real fleet member looks like.
