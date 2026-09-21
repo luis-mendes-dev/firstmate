@@ -587,6 +587,36 @@ The resolver sends the key to `curl` only as a header read from a file descripto
 The resolver fixes the endpoint at `https://api.typesafe.ai`, model at `jev-latest`, confidence floor at 0.6, and request timeout at 5 seconds; `TYPESAFE_API_KEY` is its only resolver-specific environment setting.
 The live rule-match evidence is recorded in [`verification/dispatch-resolve.md`](verification/dispatch-resolve.md).
 
+## Decision triage (.env TYPESAFE_API_KEY)
+
+`bin/fm-decision-triage.sh` triages one open worker decision with the same typesafe.ai System One model (Jev), so the routine evidence-backed questions workers raise are answered in one short tool turn instead of consuming a supervision turn or the captain's attention.
+This section is the single owner of the tool's operator contract; the script header owns its exact input schema, flags, and output lines, and [`ask-user-authority`](../.agents/skills/ask-user-authority/SKILL.md) owns the decision policy the tool serves.
+The same `TYPESAFE_API_KEY` opt-in, environment-wins precedence, and off behaviour apply as in "Typed dispatch resolution" above, and [`bin/fm-jev-lib.sh`](../bin/fm-jev-lib.sh) is the single owner of that gate, the fixed endpoint, model, five-second timeout, 0.6 confidence floor, and the secret boundary both tools keep.
+Off means one `decision-triage: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate decides exactly as it does without the tool.
+
+```sh
+bin/fm-decision-triage.sh <decision-json-file | -> [--json]
+```
+
+The flow is a firstmate-layer capability rather than worker autonomy, which is what makes it harness independent: the worker raises `needs-decision [key=<key>]` exactly as it does today on Claude Code, OpenCode, Codex, Pi, or any other supported harness, firstmate writes the decision document, runs the tool, and sends the answer back through `bin/fm-send.sh --resolve-key`, which is the existing durable decision flow and the only one this tool feeds.
+The decision document names the task, the open decision key, the verbatim question, and the concrete answer options firstmate is choosing between, each with the exact answer text that would be sent.
+The model picks among those caller-supplied option texts and never authors the answer, so a triaged decision can only ever send words firstmate already wrote.
+Optional `intent` states the accepted contract; with none supplied the task brief's own `## Captain's intent` subsection is read as repository evidence instead.
+Optional `evidence` carries repository excerpts and public research, because the calling agent is the one with the tools to gather them; every item is sent with its source and recorded with a digest.
+Two boundaries are enforced in code before any network call: the assembled decision must stay within `FM_TRIAGE_EVIDENCE_MAX` bytes (default 65536), and anything matching a credential shape is refused outright, both as an actionable exit 2 rather than a silent trim.
+
+Classification is deterministic and runs in a fixed order.
+A pre-gate regex over the question, intent, and option texts escalates merge, destructive, irreversible, security, schema, and product language with the matched text recorded and no model call at all; it can only ever escalate and can never clear a decision.
+Past the pre-gate, one POST asks two Choice questions - `class` over `routine` plus each escalate class, and `answer` over the caller's option ids plus a fixed `escalate` option - and code, not the model, decides from there.
+`resolve` requires class `routine`, an answer other than `escalate`, and both confidences at or above the shared floor; everything else is `escalate`, `ambiguous`, or `error`, and every outcome exits 0 so a decision is never blocked by this tool.
+Only a usage, input, or boundary error exits 2.
+
+Every completed triage appends dated rationale and provenance to `data/<task>/triage-<key>.md`: the status, the pre-gate result, the class and answer with their confidences, the model, latency and tokens, the evidence manifest with a digest and byte count per item, and the resolution text.
+An `error` outcome writes no record because it established nothing.
+A `resolve` prints the exact `fm-send --resolve-key` command; firstmate reads the rationale and runs it, so approving the answer stays a supervision act.
+The tool recommends and never acts: it does not send, merge, close a decision, touch a project, or answer its own escalation, and it is never authority for a merge, a secret, a destructive or irreversible action, a security tradeoff, a schema or product change, or a genuinely ambiguous finding.
+The offline behaviour evidence is recorded in [`verification/decision-triage.md`](verification/decision-triage.md).
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.
@@ -1208,7 +1238,8 @@ FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainl
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env
 FMX_DRY_RUN=            # truthy previews Relay replies and dismissals to state/x-outbox/ without posting or requiring a token
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-message split budget; values below 50 clamp to 50
-TYPESAFE_API_KEY=       # typed dispatch resolution opt-in, from the environment or .env; absent means bin/fm-dispatch-resolve.sh is off (docs/configuration.md "Typed dispatch resolution")
+TYPESAFE_API_KEY=       # typed dispatch resolution and decision triage opt-in, from the environment or .env; absent means bin/fm-dispatch-resolve.sh and bin/fm-decision-triage.sh are both off (docs/configuration.md "Typed dispatch resolution", "Decision triage")
+FM_TRIAGE_EVIDENCE_MAX=65536   # byte cap on one decision document and its evidence; over the cap is an actionable refusal, never a silent trim
 FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; values below 50 clamp to 50, values above 2000 reset to 1900
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting Relay completion follow-ups (7 days)

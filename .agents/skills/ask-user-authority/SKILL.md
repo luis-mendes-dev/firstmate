@@ -36,6 +36,17 @@ It stops at the finding, routes the decision to firstmate, and applies only the 
    - destructive, irreversible, and genuinely security-sensitive choices, which always escalate under the stronger existing captain boundary
 5. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
 
+## Triage assist
+
+`bin/fm-decision-triage.sh` is an optional assist for step 3, available for any keyed worker decision, not only a gate finding.
+Use it when the decision looks routine and the evidence that settles it can be written down; skip it whenever step 4 already applies, because it will only escalate those back.
+Write the decision document with the question verbatim, the concrete answer options you are choosing between in your own words, and the repository excerpts or public research you gathered, then run the tool.
+[`docs/configuration.md`](../../../docs/configuration.md) "Decision triage" owns its contract.
+
+It never decides for you.
+A `resolve` is a recommendation with a rationale and an exact `fm-send --resolve-key` command to read and run; `escalate`, `ambiguous`, `error`, and off all mean you decide by this skill exactly as you would without it.
+It is never authority for anything step 4 escalates, and an escalation it returns is still yours to put to the captain in the form below.
+
 ## Captain-facing escalation
 
 State all five of these elements in one concise, evidence-first escalation:

@@ -461,6 +461,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/decision-triage.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/devin.md",
       "audience": "maintainer-verification"
     },
