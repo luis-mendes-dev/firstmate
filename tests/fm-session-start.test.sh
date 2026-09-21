@@ -87,10 +87,15 @@ SH
 exit 0
 SH
   chmod +x "$fakebin/gh"
+  # Advertises both capabilities bootstrap probes: --lease and --root
+  # (bin/fm-treehouse-lib.sh). A stub missing either reads as a treehouse too old
+  # to keep this home's pool out of the shared one, which is not what these cases
+  # are about.
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
   printf '%s\n' 'Usage: treehouse get [--lease]'
+  printf '%s\n' '      --root string   Worktree root directory'
   exit 0
 fi
 exit 0
